@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spotify Audio Embed</title>
+<style>
+  /* Layout: one narrow column — controls on top, a clean "stage" below to screenshot */
+  :root {
+    --bg: #f3f5f2;
+    --panel: #ffffff;
+    --fg: #1c211d;
+    --muted: #5f6b62;
+    --line: #d9dfda;
+    --accent: #1d8a4e;
+    --stage: #ffffff;
+    --font: "Segoe UI", system-ui, -apple-system, Helvetica, Arial, sans-serif;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141815;
+      --panel: #1c211d;
+      --fg: #e8ece9;
+      --muted: #9aa69d;
+      --line: #2e3530;
+      --accent: #3fbf74;
+      --stage: #ffffff;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 15px/1.5 var(--font);
+    padding: 32px 16px 48px;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; display: grid; gap: 20px; }
+  h1 { font-size: 20px; margin: 0; font-weight: 650; }
+  .sub { color: var(--muted); margin: 4px 0 0; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 18px;
+    display: grid;
+    gap: 14px;
+  }
+  label { font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+  .field { display: grid; gap: 6px; }
+  input[type=text], input[type=number] {
+    font: inherit;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--bg);
+    color: var(--fg);
+    width: 100%;
+  }
+  input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .row { display: flex; flex-wrap: wrap; gap: 14px; align-items: end; }
+  .row .field { flex: 0 0 120px; }
+  .seg { display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; background: transparent; color: var(--fg); padding: 9px 14px; }
+  .seg button[aria-pressed=true] { background: var(--accent); color: #fff; }
+  button {
+    font: inherit;
+    cursor: pointer;
+    padding: 9px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--fg);
+  }
+  .error { color: #c0392b; margin: 0; font-size: 14px; }
+  .stage {
+    background: var(--stage);
+    border-radius: 10px;
+    padding: 24px;
+    overflow-x: auto;
+    display: flex;
+    justify-content: center;
+  }
+  .stage iframe { display: block; border: 0; border-radius: 12px; }
+  .empty { color: #6b746d; padding: 40px 0; text-align: center; }
+  .hint { color: var(--muted); font-size: 13px; margin: 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div>
+    <h1>Spotify Audio Embed</h1>
+    <p class="sub">Paste a Spotify episode link to get the audio player, even for video episodes.</p>
+  </div>
+
+  <div class="panel">
+    <div class="field">
+      <label for="link">Episode link</label>
+      <input id="link" type="text" placeholder="https://open.spotify.com/episode/…" autocomplete="off">
+    </div>
+    <div class="row">
+      <div class="field">
+        <label for="width">Width (px)</label>
+        <input id="width" type="number" min="250" max="1200" value="500">
+      </div>
+      <div class="field" style="flex:0 0 auto">
+        <label>Player size</label>
+        <div class="seg" role="group" aria-label="Player size">
+          <button type="button" id="sizeStd" aria-pressed="true">Standard</button>
+          <button type="button" id="sizeCompact" aria-pressed="false">Compact</button>
+        </div>
+      </div>
+      <button type="button" id="download">Download image</button>
+      <button type="button" id="copy">Copy embed code</button>
+    </div>
+    <p class="error" id="err" hidden></p>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="empty">The player will appear here.</div>
+  </div>
+  <p class="hint">Click Download image and choose Allow when the browser asks to share this tab, or screenshot the white area yourself. Works in Chrome and Edge.</p>
+</div>
+
+<script>
+  const $ = id => document.getElementById(id);
+  let height = 352;
+  let currentId = null;
+
+  function store(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+  function load(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+
+  // Accepts open.spotify.com/episode/ID, /embed/episode/ID(/video), embed.spotify.com/episode/ID,
+  // spotify:episode:ID, or a bare 22-character ID
+  function parseId(text) {
+    const t = text.trim();
+    let m = t.match(/episode[\/:]([A-Za-z0-9]{22})/);
+    if (m) return m[1];
+    m = t.match(/^([A-Za-z0-9]{22})$/);
+    return m ? m[1] : null;
+  }
+
+  function embedSrc(id) { return `https://open.spotify.com/embed/episode/${id}?utm_source=generator`; }
+
+  function width() {
+    const w = parseInt($('width').value, 10);
+    return isNaN(w) ? 500 : Math.min(1200, Math.max(250, w));
+  }
+
+  function embedCode(id) {
+    return `<iframe style="border-radius:12px" src="${embedSrc(id)}" width="${width()}" height="${height}" frameBorder="0" allowfullscreen="" allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" loading="lazy"></iframe>`;
+  }
+
+  function render() {
+    const text = $('link').value;
+    const id = parseId(text);
+    $('err').hidden = true;
+    if (!text.trim()) {
+      currentId = null;
+      $('stage').innerHTML = '<div class="empty">The player will appear here.</div>';
+      return;
+    }
+    if (!id) {
+      $('err').textContent = "That doesn't look like a Spotify episode link. Copy it from Share → Copy link to episode.";
+      $('err').hidden = false;
+      return;
+    }
+    currentId = id;
+    const f = document.createElement('iframe');
+    f.src = embedSrc(id);
+    f.width = width();
+    f.height = height;
+    f.allow = 'autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture';
+    f.loading = 'lazy';
+    $('stage').replaceChildren(f);
+  }
+
+  function setSize(h) {
+    height = h;
+    $('sizeStd').setAttribute('aria-pressed', h === 352);
+    $('sizeCompact').setAttribute('aria-pressed', h === 152);
+    store('spae-height', h);
+    if (currentId) render();
+  }
+
+  function showErr(msg) { $('err').textContent = msg; $('err').hidden = false; }
+
+  // A page can't read another site's iframe pixels, so we capture this tab
+  // (the browser asks permission each time), crop to the player and save a PNG.
+  async function downloadImage() {
+    $('err').hidden = true;
+    const f = $('stage').querySelector('iframe');
+    if (!f) { showErr('Paste an episode link first.'); return; }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+      showErr("This browser can't capture the page. Open this file in Chrome or Edge, or take a screenshot instead.");
+      return;
+    }
+    f.scrollIntoView({ block: 'center' });
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { displaySurface: 'browser' },
+        audio: false,
+        preferCurrentTab: true,
+        selfBrowserSurface: 'include'
+      });
+    } catch (e) {
+      showErr('No image saved because the capture was cancelled or blocked. Click Download image again and choose Allow.');
+      return;
+    }
+    const [track] = stream.getVideoTracks();
+    $('download').textContent = 'Saving…';
+    try {
+      let cropped = false;
+      if (window.CropTarget && track.cropTo) {
+        try { await track.cropTo(await CropTarget.fromElement(f)); cropped = true; } catch (e) {}
+      }
+      const video = document.createElement('video');
+      video.srcObject = stream;
+      video.muted = true;
+      await video.play();
+      await new Promise(r => setTimeout(r, 600)); // let the browser's sharing bar settle
+      const vw = video.videoWidth, vh = video.videoHeight;
+      let sx = 0, sy = 0, sw = vw, sh = vh;
+      if (!cropped) {
+        const rect = f.getBoundingClientRect();
+        const scale = vw / window.innerWidth;
+        sx = rect.left * scale; sy = rect.top * scale;
+        sw = rect.width * scale; sh = rect.height * scale;
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(sw);
+      canvas.height = Math.round(sh);
+      canvas.getContext('2d').drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise(r => canvas.toBlob(r, 'image/png'));
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `spotify-audio-${currentId}.png`;
+      document.body.append(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+      $('download').textContent = 'Saved';
+    } catch (e) {
+      showErr("The image couldn't be saved. Try again, or take a screenshot of the white area.");
+      $('download').textContent = 'Download image';
+    } finally {
+      track.stop();
+      setTimeout(() => { $('download').textContent = 'Download image'; }, 1800);
+    }
+  }
+
+  $('download').addEventListener('click', downloadImage);
+  $('link').addEventListener('input', render);
+  $('width').addEventListener('change', () => { store('spae-width', width()); if (currentId) render(); });
+  $('sizeStd').addEventListener('click', () => setSize(352));
+  $('sizeCompact').addEventListener('click', () => setSize(152));
+  $('copy').addEventListener('click', async () => {
+    if (!currentId) { $('err').textContent = 'Paste an episode link first.'; $('err').hidden = false; return; }
+    const code = embedCode(currentId);
+    try {
+      await navigator.clipboard.writeText(code);
+      $('copy').textContent = 'Copied';
+    } catch (e) {
+      $('link').value = code; $('link').select();
+      $('copy').textContent = 'Press Ctrl+C';
+    }
+    setTimeout(() => { $('copy').textContent = 'Copy embed code'; }, 1800);
+  });
+
+  const w = load('spae-width'); if (w) $('width').value = w;
+  const h = parseInt(load('spae-height'), 10); if (h === 152) setSize(152);
+</script>
+</body>
+</html>
